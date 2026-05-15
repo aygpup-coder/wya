@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>wya?</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700;9..144,900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  html, body { background: #EFF6FF; }
+  body { font-family: 'Inter', system-ui, sans-serif; color: #0F172A; }
+  .font-display { font-family: 'Fraunces', Georgia, serif; }
+  .scroll-shadow::-webkit-scrollbar { height: 10px; width: 10px; }
+  .scroll-shadow::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 8px; }
+  .scroll-shadow::-webkit-scrollbar-track { background: transparent; }
+  .no-tap-highlight { -webkit-tap-highlight-color: transparent; }
+  .cell-btn { touch-action: manipulation; }
+  .cal-scroll { touch-action: pan-x pan-y pinch-zoom; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+const BIN_ID = "6a07a0b6250b1311c357ea00";
+const MASTER_KEY = "$2a$10$lzm5XzmGnTkKtV4sx.hEtO3Ir2o87zWSQcpFr9NlfzBTVsa3Q.ijG";
+const API_BASE = "https://api.jsonbin.io/v3/b/" + BIN_ID;
+
+const DEFAULT_MEMBERS = [
+  { id: "m-K", initial: "K", name: "Keeks", bg: "#DBEAFE", text: "#1E3A8A" },
+  { id: "m-A", initial: "A", name: "Addie", bg: "#BAE6FD", text: "#0C4A6E" },
+  { id: "m-N", initial: "N", name: "Nick",  bg: "#BFDBFE", text: "#1E40AF" },
+  { id: "m-B", initial: "B", name: "Bea",   bg: "#C7D2FE", text: "#3730A3" },
+  { id: "m-M", initial: "M", name: "Mom",   bg: "#FECACA", text: "#991B1B" },
+  { id: "m-D", initial: "D", name: "Dad",   bg: "#FEE2E2", text: "#B91C1C" },
+];
+
+const DEFAULT_ADDRESSES = ["133e65","Fishers","Flagler","Philly","River","SHamp","TownH","Tufts","UVA"];
+
+function sortAddresses(list) {
+  const digits = [], letters = [];
+  for (const a of list) {
+    if (/^\d/.test(a)) digits.push(a); else letters.push(a);
+  }
+  digits.sort((a,b) => a.localeCompare(b));
+  letters.sort((a,b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+  return [...digits, ...letters];
+}
+
+function sortMembers(list) {
+  return [...list].sort((a,b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+}
+
+function pad(n) { return n < 10 ? "0" + n : "" + n; }
+function ymd(d) { return d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate()); }
+function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate()+n); return x; }
+function sameYMD(a,b) { return ymd(a) === ymd(b); }
+const WD = ["S","M","T","W","T","F","S"];
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+function StatusPill({ status }) {
+  const cfg = {
+    synced:  { bg: "#DCFCE7", text: "#166534", dot: "#16A34A", label: "synced" },
+    saving:  { bg: "#FEF3C7", text: "#92400E", dot: "#D97706", label: "saving…" },
+    offline: { bg: "#FEE2E2", text: "#991B1B", dot: "#DC2626", label: "offline" },
+  }[status] || { bg:"#E2E8F0", text:"#475569", dot:"#64748B", label: status };
+  return (
+    <div className="fixed top-3 right-3 z-50 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold shadow"
+         style={{ background: cfg.bg, color: cfg.text }}>
+      <span className="w-2 h-2 rounded-full" style={{ background: cfg.dot }}></span>
+      {cfg.label}
+    </div>
+  );
+}
+
+function Modal({ open, onClose, title, children }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ background: "rgba(15,23,42,0.5)" }} onClick={onClose}>
+      <div className="bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl shadow-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="sticky top-0 bg-white border-b px-5 py-4 flex items-center justify-between" style={{ borderColor: "#E2E8F0" }}>
+          <h3 className="font-display text-2xl font-bold" style={{ color: "#0F172A" }}>{title}</h3>
+          <button onClick={onClose} className="w-9 h-9 rounded-full flex items-center justify-center text-xl no-tap-highlight" style={{ background: "#EFF6FF", color: "#0F172A" }}>✕</button>
+        </div>
+        <div className="p-5">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [members, setMembers] = useState(DEFAULT_MEMBERS);
+  const [addresses, setAddresses] = useState(DEFAULT_ADDRESSES);
+  const [assignments, setAssignments] = useState({});
+  const [membersVersion, setMembersVersion] = useState(3);
+  const [loaded, setLoaded] = useState(false);
+  const [activeId, setActiveId] = useState(null);
+  const [status, setStatus] = useState("saving");
+  const [days, setDays] = useState(49);
+  const [visibleMonth, setVisibleMonth] = useState("");
+  const [familyOpen, setFamilyOpen] = useState(false);
+  const [addrOpen, setAddrOpen] = useState(false);
+  const [familyMode, setFamilyMode] = useState("add");
+  const [addrMode, setAddrMode] = useState("add");
+  const [newName, setNewName] = useState("");
+  const [newInitial, setNewInitial] = useState("");
+  const [newAddr, setNewAddr] = useState("");
+
+  const scrollRef = useRef(null);
+  const saveTimer = useRef(null);
+  const skipSave = useRef(true);
+  const lastWrite = useRef(0);
+
+  const today = useMemo(() => { const t = new Date(); t.setHours(0,0,0,0); return t; }, []);
+  const todayKey = ymd(today);
+
+  const sortedMembers = useMemo(() => sortMembers(members), [members]);
+  const active = useMemo(() => members.find(m => m.id === activeId) || null, [members, activeId]);
+
+  // Initial load
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(API_BASE + "/latest", { headers: { "X-Master-Key": MASTER_KEY }});
+        if (!r.ok) throw new Error("load failed");
+        const data = await r.json();
+        const rec = data.record || {};
+        if (cancelled) return;
+        const m = Array.isArray(rec.members) && rec.members.length ? rec.members : DEFAULT_MEMBERS;
+        const a = Array.isArray(rec.addresses) && rec.addresses.length ? sortAddresses(rec.addresses) : DEFAULT_ADDRESSES;
+        const asg = rec.assignments && typeof rec.assignments === "object" ? rec.assignments : {};
+        const v = typeof rec.membersVersion === "number" ? rec.membersVersion : 3;
+        setMembers(m);
+        setAddresses(a);
+        setAssignments(asg);
+        setMembersVersion(v);
+        const lastId = localStorage.getItem("wya:activeId");
+        if (lastId && m.some(x => x.id === lastId)) setActiveId(lastId);
+        setLoaded(true);
+        setStatus("synced");
+      } catch (e) {
+        setStatus("offline");
+        setLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Polling every 8s
+  useEffect(() => {
+    if (!loaded) return;
+    const id = setInterval(async () => {
+      // skip if we just wrote — give server a beat
+      if (Date.now() - lastWrite.current < 2000) return;
+      try {
+        const r = await fetch(API_BASE + "/latest", { headers: { "X-Master-Key": MASTER_KEY }});
+        if (!r.ok) throw new Error();
+        const data = await r.json();
+        const rec = data.record || {};
+        skipSave.current = true;
+        if (Array.isArray(rec.members)) setMembers(rec.members);
+        if (Array.isArray(rec.addresses)) setAddresses(sortAddresses(rec.addresses));
+        if (rec.assignments) setAssignments(rec.assignments);
+        if (typeof rec.membersVersion === "number") setMembersVersion(rec.membersVersion);
+        setStatus(s => s === "offline" ? "synced" : s);
+      } catch (e) {
+        setStatus("offline");
+      }
+    }, 8000);
+    return () => clearInterval(id);
+  }, [loaded]);
+
+  // Save (debounced 500ms)
+  useEffect(() => {
+    if (!loaded) return;
+    if (skipSave.current) { skipSave.current = false; return; }
+    setStatus("saving");
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      try {
+        const body = { members, addresses: sortAddresses(addresses), assignments, membersVersion };
+        const r = await fetch(API_BASE, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", "X-Master-Key": MASTER_KEY },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) throw new Error();
+        lastWrite.current = Date.now();
+        setStatus("synced");
+      } catch (e) {
+        setStatus("offline");
+      }
+    }, 500);
+    return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
+  }, [members, addresses, assignments, membersVersion, loaded]);
+
+  // Persist active member locally
+  useEffect(() => {
+    if (activeId) localStorage.setItem("wya:activeId", activeId);
+  }, [activeId]);
+
+  // Build day array
+  const dayList = useMemo(() => {
+    const arr = [];
+    for (let i = 0; i < days; i++) arr.push(addDays(today, i));
+    return arr;
+  }, [days, today]);
+
+  // Group days by month for header
+  const monthSpans = useMemo(() => {
+    const out = [];
+    let cur = null;
+    for (const d of dayList) {
+      const key = d.getFullYear() + "-" + d.getMonth();
+      if (!cur || cur.key !== key) {
+        cur = { key, label: MONTHS[d.getMonth()] + " " + d.getFullYear(), span: 1 };
+        out.push(cur);
+      } else cur.span++;
+    }
+    return out;
+  }, [dayList]);
+
+  // Visible month tracker
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const update = () => {
+      // Find leftmost visible day column
+      const sl = el.scrollLeft;
+      const leftEdge = sl + 140; // past sticky col
+      // Each day col approx 56px
+      const colW = 56;
+      let idx = Math.max(0, Math.floor((leftEdge - 140) / colW));
+      if (idx >= dayList.length) idx = dayList.length - 1;
+      const d = dayList[idx];
+      if (d) setVisibleMonth(MONTHS[d.getMonth()] + " " + d.getFullYear());
+      // Infinite scroll
+      const remaining = el.scrollWidth - (el.scrollLeft + el.clientWidth);
+      if (remaining < 400 && days < 365) {
+        setDays(d => Math.min(365, d + 31));
+      }
+    };
+    update();
+    el.addEventListener("scroll", update, { passive: true });
+    return () => el.removeEventListener("scroll", update);
+  }, [dayList, days]);
+
+  // Cell tap
+  const tapCell = useCallback((addr, dateKey) => {
+    if (!activeId) return;
+    setAssignments(prev => {
+      const key = addr + "|" + dateKey;
+      const cur = prev[key] || [];
+      const next = { ...prev };
+      if (cur.includes(activeId)) {
+        const filtered = cur.filter(x => x !== activeId);
+        if (filtered.length === 0) delete next[key];
+        else next[key] = filtered;
+      } else {
+        // remove activeId from any other cell with same dateKey
+        for (const k of Object.keys(next)) {
+          if (k === key) continue;
+          if (k.endsWith("|" + dateKey)) {
+            const arr = next[k];
+            if (arr.includes(activeId)) {
+              const f = arr.filter(x => x !== activeId);
+              if (f.length === 0) delete next[k]; else next[k] = f;
+            }
+          }
+        }
+        next[key] = [...cur, activeId];
+      }
+      return next;
+    });
+  }, [activeId]);
+
+  // Manage Family
+  const addMember = () => {
+    const name = newName.trim();
+    const ini = newInitial.trim().toUpperCase().slice(0,1);
+    if (!name || !ini) return;
+    const id = "m-" + Date.now().toString(36);
+    const palette = [
+      { bg: "#DBEAFE", text: "#1E3A8A" },
+      { bg: "#BAE6FD", text: "#0C4A6E" },
+      { bg: "#BFDBFE", text: "#1E40AF" },
+      { bg: "#C7D2FE", text: "#3730A3" },
+      { bg: "#FECACA", text: "#991B1B" },
+      { bg: "#FEE2E2", text: "#B91C1C" },
+    ];
+    const p = palette[members.length % palette.length];
+    setMembers([...members, { id, initial: ini, name, bg: p.bg, text: p.text }]);
+    setMembersVersion(v => v + 1);
+    setNewName(""); setNewInitial("");
+  };
+  const removeMember = (id) => {
+    setMembers(members.filter(m => m.id !== id));
+    if (activeId === id) setActiveId(null);
+    setAssignments(prev => {
+      const next = {};
+      for (const k of Object.keys(prev)) {
+        const arr = prev[k].filter(x => x !== id);
+        if (arr.length) next[k] = arr;
+      }
+      return next;
+    });
+    setMembersVersion(v => v + 1);
+  };
+
+  // Manage Addresses
+  const addAddress = () => {
+    const a = newAddr.trim();
+    if (!a) return;
+    if (addresses.includes(a)) { setNewAddr(""); return; }
+    setAddresses(sortAddresses([...addresses, a]));
+    setNewAddr("");
+  };
+  const lockedFor = useCallback((addr) => {
+    let n = 0;
+    for (const k of Object.keys(assignments)) {
+      const idx = k.indexOf("|");
+      if (idx < 0) continue;
+      const a = k.slice(0, idx);
+      const d = k.slice(idx+1);
+      if (a === addr && d >= todayKey && assignments[k].length > 0) n++;
+    }
+    return n;
+  }, [assignments, todayKey]);
+  const removeAddress = (addr) => {
+    if (lockedFor(addr) > 0) return; // hard guard
+    setAddresses(addresses.filter(a => a !== addr));
+  };
+
+  if (!loaded) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: "#EFF6FF" }}>
+        <StatusPill status={status} />
+        <div className="font-display text-4xl" style={{ color: "#0F172A" }}>wya<span style={{ color: "#DC2626" }}>?</span></div>
+      </div>
+    );
+  }
+
+  const stepBg = active ? active.bg : "#FFFFFF";
+  const stepText = active ? active.text : "#0F172A";
+
+  return (
+    <div className="min-h-screen pb-24" style={{ background: "#EFF6FF" }}>
+      <StatusPill status={status} />
+
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-6 sm:pt-8">
+        <h1 className="font-display font-black tracking-tight" style={{ color: "#0F172A", fontSize: "clamp(3rem, 10vw, 5.5rem)", lineHeight: 1 }}>
+          wya<span style={{ color: "#DC2626" }}>?</span>
+        </h1>
+
+        {/* Step 1 */}
+        <div className="mt-6 rounded-3xl p-5 sm:p-6 shadow-sm transition-colors" style={{ background: stepBg, border: "1px solid #E2E8F0" }}>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="text-xs font-bold uppercase tracking-wider opacity-70" style={{ color: stepText }}>Step 1 · Tap your initial</div>
+            <div className="flex items-center gap-3">
+              <div className="text-sm sm:text-base font-semibold" style={{ color: stepText }}>
+                You are: <span className="font-display font-bold">{active ? active.name : "—"}</span>
+              </div>
+              <div className="w-12 h-12 rounded-full flex items-center justify-center font-display font-black text-2xl shadow" style={{ background: "#FFFFFF", color: stepText }}>
+                {active ? active.initial : "?"}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-5 grid grid-cols-3 sm:grid-cols-6 gap-3">
+            {sortedMembers.map(m => {
+              const isActive = activeId === m.id;
+              return (
+                <button key={m.id}
+                  onClick={() => setActiveId(m.id)}
+                  className="relative aspect-square rounded-2xl flex items-center justify-center font-display font-black no-tap-highlight transition-transform"
+                  style={{
+                    background: m.bg,
+                    color: m.text,
+                    border: isActive ? "4px solid " + m.text : "2px solid rgba(15,23,42,0.08)",
+                    transform: isActive ? "scale(1.05)" : "scale(1)",
+                    fontSize: "clamp(2rem, 6vw, 3.25rem)",
+                    boxShadow: isActive ? "0 8px 20px rgba(15,23,42,0.15)" : "0 2px 6px rgba(15,23,42,0.06)",
+                  }}>
+                  {m.initial}
+                  {isActive && (
+                    <span className="absolute -top-2 -right-2 w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold shadow" style={{ background: "#DC2626", color: "#FFFFFF" }}>✓</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Calendar */}
+        <div className="mt-6 rounded-3xl bg-white shadow-sm overflow-hidden" style={{ border: "1px solid #E2E8F0" }}>
+          <div ref={scrollRef} className="overflow-x-auto overflow-y-auto scroll-shadow cal-scroll" style={{ maxHeight: "70vh" }}>
+            <table className="border-collapse" style={{ borderSpacing: 0 }}>
+              <thead>
+                {/* Month group row */}
+                <tr>
+                  <th className="sticky left-0 top-0 z-30 text-left px-3 py-2 align-bottom" style={{ background: "#FFFFFF", borderBottom: "1px solid #E2E8F0", minWidth: 140, width: 140 }}>
+                    <div className="font-display font-bold text-lg leading-tight" style={{ color: "#1E3A8A" }}>{visibleMonth}</div>
+                  </th>
+                  {monthSpans.map((m,i) => (
+                    <th key={i} colSpan={m.span} className="sticky top-0 z-20 text-left px-3 py-2 text-xs font-bold uppercase tracking-wider" style={{ background: "#FFFFFF", color: "#1E3A8A", borderBottom: "1px solid #E2E8F0", borderLeft: i === 0 ? "none" : "1px solid #E2E8F0" }}>
+                      {m.label}
+                    </th>
+                  ))}
+                </tr>
+                {/* Day header row */}
+                <tr>
+                  <th className="sticky left-0 z-20 px-3 py-2" style={{ background: "#FFFFFF", borderBottom: "1px solid #E2E8F0", top: 44, minWidth: 140, width: 140 }}></th>
+                  {dayList.map((d, i) => {
+                    const isToday = sameYMD(d, today);
+                    const dow = d.getDay();
+                    const weekend = dow === 0 || dow === 6;
+                    return (
+                      <th key={i} className="px-1 py-1 text-center" style={{
+                        background: isToday ? "#DC2626" : (weekend ? "#DBEAFE" : "#FFFFFF"),
+                        color: isToday ? "#FFFFFF" : "#0F172A",
+                        borderBottom: "1px solid #E2E8F0",
+                        position: "sticky", top: 44, zIndex: 10,
+                        minWidth: 56, width: 56,
+                      }}>
+                        <div className="text-[10px] font-bold uppercase opacity-80">{WD[dow]}</div>
+                        <div className="font-display font-bold text-lg leading-none">{d.getDate()}</div>
+                        {isToday && <div className="text-[9px] font-bold uppercase tracking-wider mt-0.5">today</div>}
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {addresses.map((addr, rIdx) => {
+                  const rowBg = rIdx % 2 === 0 ? "#FFFFFF" : "#F8FAFC";
+                  return (
+                    <tr key={addr}>
+                      <th className="sticky left-0 z-10 text-left px-3 py-2 font-display font-bold" style={{ background: rowBg, color: "#1E3A8A", borderBottom: "1px solid #E2E8F0", minWidth: 140, width: 140 }}>
+                        {addr}
+                      </th>
+                      {dayList.map((d, cIdx) => {
+                        const dow = d.getDay();
+                        const weekend = dow === 0 || dow === 6;
+                        const isToday = sameYMD(d, today);
+                        const key = addr + "|" + ymd(d);
+                        const ids = assignments[key] || [];
+                        const occupants = ids.map(id => members.find(m => m.id === id)).filter(Boolean);
+                        const n = occupants.length;
+                        const sizes = { 1: [28,18], 2: [22,14], 3: [18,12], 4: [16,10] };
+                        const [chip, fs] = sizes[n] || [14,9];
+                        const cellBg = isToday ? "rgba(220,38,38,0.06)" : (weekend ? "#DBEAFE" : rowBg);
+                        return (
+                          <td key={cIdx} style={{
+                            background: cellBg,
+                            borderBottom: "1px solid #E2E8F0",
+                            borderLeft: "1px solid #F1F5F9",
+                            padding: 0, minWidth: 56, width: 56, height: 52,
+                          }}>
+                            <button onClick={() => tapCell(addr, ymd(d))}
+                              className="w-full h-full flex items-center justify-center cell-btn no-tap-highlight"
+                              style={{ background: "transparent" }}>
+                              {n === 0 ? (
+                                active ? (
+                                  <span className="font-display font-bold" style={{ color: "rgba(15,23,42,0.18)", fontSize: 13 }}>+{active.initial}</span>
+                                ) : null
+                              ) : (
+                                <div className="flex items-center justify-center flex-wrap gap-0.5" style={{ maxWidth: 52 }}>
+                                  {occupants.map(o => {
+                                    const ring = active && o.id === active.id;
+                                    return (
+                                      <span key={o.id} className="rounded-full flex items-center justify-center font-display font-bold"
+                                        style={{
+                                          background: o.bg, color: o.text,
+                                          width: chip, height: chip, fontSize: fs,
+                                          boxShadow: ring ? "0 0 0 2px " + o.text : "0 1px 2px rgba(15,23,42,0.15)",
+                                        }}>
+                                        {o.initial}
+                                      </span>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </button>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Manage buttons */}
+        <div className="mt-6 flex flex-wrap gap-3">
+          <button onClick={() => setFamilyOpen(true)} className="px-5 py-3 rounded-2xl bg-white shadow-sm font-semibold no-tap-highlight" style={{ border: "1px solid #CBD5E1", color: "#0F172A" }}>
+            <span className="mr-1">⚙</span> Manage family
+          </button>
+          <button onClick={() => setAddrOpen(true)} className="px-5 py-3 rounded-2xl bg-white shadow-sm font-semibold no-tap-highlight" style={{ border: "1px solid #CBD5E1", color: "#0F172A" }}>
+            <span className="mr-1">⚙</span> Manage addresses
+          </button>
+        </div>
+      </div>
+
+      {/* Family modal */}
+      <Modal open={familyOpen} onClose={() => setFamilyOpen(false)} title="Manage family">
+        <div className="flex gap-2 mb-4">
+          <button onClick={() => setFamilyMode("add")} className="flex-1 py-2 rounded-xl font-semibold no-tap-highlight" style={{ background: familyMode === "add" ? "#DC2626" : "#EFF6FF", color: familyMode === "add" ? "#FFFFFF" : "#0F172A" }}>Add</button>
+          <button onClick={() => setFamilyMode("remove")} className="flex-1 py-2 rounded-xl font-semibold no-tap-highlight" style={{ background: familyMode === "remove" ? "#DC2626" : "#EFF6FF", color: familyMode === "remove" ? "#FFFFFF" : "#0F172A" }}>Remove</button>
+        </div>
+        {familyMode === "add" ? (
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs font-bold uppercase tracking-wider" style={{ color: "#475569" }}>Name</label>
+              <input value={newName} onChange={e => setNewName(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl outline-none" style={{ border: "1px solid #CBD5E1", background: "#FFFFFF" }} placeholder="e.g. Sam" />
+            </div>
+            <div>
+              <label className="text-xs font-bold uppercase tracking-wider" style={{ color: "#475569" }}>Initial</label>
+              <input value={newInitial} onChange={e => setNewInitial(e.target.value.toUpperCase().slice(0,1))} className="mt-1 w-full px-3 py-2 rounded-xl outline-none font-display font-bold text-2xl" style={{ border: "1px solid #CBD5E1", background: "#FFFFFF" }} placeholder="S" maxLength={1} />
+            </div>
+            <button onClick={addMember} className="w-full py-3 rounded-xl font-semibold no-tap-highlight" style={{ background: "#DC2626", color: "#FFFFFF" }}>Save</button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {sortedMembers.map(m => (
+              <button key={m.id} onClick={() => removeMember(m.id)} className="w-full flex items-center justify-between px-3 py-2 rounded-xl no-tap-highlight" style={{ border: "1px solid #E2E8F0", background: "#FFFFFF" }}>
+                <div className="flex items-center gap-3">
+                  <span className="w-9 h-9 rounded-full flex items-center justify-center font-display font-bold" style={{ background: m.bg, color: m.text }}>{m.initial}</span>
+                  <span className="font-semibold">{m.name}</span>
+                </div>
+                <span className="text-sm font-bold" style={{ color: "#DC2626" }}>Remove</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="mt-5 pt-4" style={{ borderTop: "1px solid #E2E8F0" }}>
+          <div className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: "#475569" }}>Current family ({members.length})</div>
+          <div className="flex flex-wrap gap-2">
+            {sortedMembers.map(m => (
+              <span key={m.id} className="px-3 py-1 rounded-full font-semibold text-sm" style={{ background: m.bg, color: m.text }}>{m.initial} · {m.name}</span>
+            ))}
+          </div>
+        </div>
+      </Modal>
+
+      {/* Address modal */}
+      <Modal open={addrOpen} onClose={() => setAddrOpen(false)} title="Manage addresses">
+        <div className="flex gap-2 mb-4">
+          <button onClick={() => setAddrMode("add")} className="flex-1 py-2 rounded-xl font-semibold no-tap-highlight" style={{ background: addrMode === "add" ? "#DC2626" : "#EFF6FF", color: addrMode === "add" ? "#FFFFFF" : "#0F172A" }}>Add</button>
+          <button onClick={() => setAddrMode("remove")} className="flex-1 py-2 rounded-xl font-semibold no-tap-highlight" style={{ background: addrMode === "remove" ? "#DC2626" : "#EFF6FF", color: addrMode === "remove" ? "#FFFFFF" : "#0F172A" }}>Remove</button>
+        </div>
+        {addrMode === "add" ? (
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs font-bold uppercase tracking-wider" style={{ color: "#475569" }}>Address label</label>
+              <input value={newAddr} onChange={e => setNewAddr(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-xl outline-none" style={{ border: "1px solid #CBD5E1", background: "#FFFFFF" }} placeholder="e.g. Lake" />
+            </div>
+            <button onClick={addAddress} className="w-full py-3 rounded-xl font-semibold no-tap-highlight" style={{ background: "#DC2626", color: "#FFFFFF" }}>Save</button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {addresses.map(a => {
+              const n = lockedFor(a);
+              const locked = n > 0;
+              return (
+                <button key={a} disabled={locked} onClick={() => removeAddress(a)}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl no-tap-highlight"
+                  style={{ border: "1px solid #E2E8F0", background: "#FFFFFF", opacity: locked ? 0.5 : 1, cursor: locked ? "not-allowed" : "pointer" }}>
+                  <span className="font-display font-bold" style={{ color: "#1E3A8A" }}>{a}</span>
+                  {locked ? <span className="text-sm font-bold" style={{ color: "#475569" }}>🔒 {n}</span> : <span className="text-sm font-bold" style={{ color: "#DC2626" }}>Remove</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <div className="mt-5 pt-4" style={{ borderTop: "1px solid #E2E8F0" }}>
+          <div className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: "#475569" }}>Current addresses ({addresses.length})</div>
+          <div className="flex flex-wrap gap-2">
+            {addresses.map(a => (
+              <span key={a} className="px-3 py-1 rounded-full font-semibold text-sm" style={{ background: "#DBEAFE", color: "#1E3A8A" }}>{a}</span>
+            ))}
+          </div>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
