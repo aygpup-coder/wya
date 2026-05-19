@@ -21,6 +21,52 @@
   .no-tap-highlight { -webkit-tap-highlight-color: transparent; }
   .cell-btn { touch-action: manipulation; }
   .cal-scroll { touch-action: pan-x pan-y pinch-zoom; }
+
+  /* Travel picker popup */
+  .travel-popup {
+    position: fixed;
+    z-index: 60;
+    background: white;
+    border-radius: 20px;
+    box-shadow: 0 20px 60px rgba(15,23,42,0.25), 0 4px 16px rgba(15,23,42,0.1);
+    padding: 16px;
+    min-width: 220px;
+    border: 1px solid #E2E8F0;
+    animation: popIn 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  @keyframes popIn {
+    from { opacity: 0; transform: scale(0.85); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+  .travel-btn {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1.5px solid #E2E8F0;
+    background: #F8FAFC;
+    font-family: 'Inter', sans-serif;
+    font-weight: 600;
+    font-size: 14px;
+    color: #0F172A;
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s, transform 0.1s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .travel-btn:active { transform: scale(0.97); }
+  .travel-btn.selected {
+    border-color: #1E3A8A;
+    background: #DBEAFE;
+    color: #1E3A8A;
+  }
+  .travel-btn .travel-icon { font-size: 20px; line-height: 1; }
+  .travel-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+  }
 </style>
 </head>
 <body>
@@ -32,6 +78,14 @@ const { useState, useEffect, useRef, useMemo, useCallback } = React;
 const BIN_ID = "6a07a0b6250b1311c357ea00";
 const MASTER_KEY = "$2a$10$lzm5XzmGnTkKtV4sx.hEtO3Ir2o87zWSQcpFr9NlfzBTVsa3Q.ijG";
 const API_BASE = "https://api.jsonbin.io/v3/b/" + BIN_ID;
+
+// Travel modes config
+const TRAVEL_MODES = [
+  { id: "car",   icon: "🚗", label: "Car" },
+  { id: "plane", icon: "✈️", label: "Plane" },
+  { id: "train", icon: "🚂", label: "Train" },
+  { id: "bus",   icon: "🚌", label: "Bus" },
+];
 
 const DEFAULT_MEMBERS = [
   { id: "m-K", initial: "K", name: "Keeks", bg: "#DBEAFE", text: "#1E3A8A" },
@@ -95,10 +149,67 @@ function Modal({ open, onClose, title, children }) {
   );
 }
 
+// Travel mode picker popup
+function TravelPicker({ anchor, onSelect, onRemove, onClose, currentTravel, activeMember }) {
+  const popupRef = useRef(null);
+
+  // Position popup near the tapped cell
+  const style = useMemo(() => {
+    if (!anchor) return {};
+    const margin = 8;
+    let top = anchor.bottom + margin;
+    let left = anchor.left + anchor.width / 2 - 110;
+    // Keep on screen
+    left = Math.max(margin, Math.min(left, window.innerWidth - 240 - margin));
+    if (top + 280 > window.innerHeight) {
+      top = anchor.top - 280 - margin;
+    }
+    return { top, left };
+  }, [anchor]);
+
+  if (!anchor) return null;
+
+  return (
+    <>
+      <div className="travel-overlay" onClick={onClose} />
+      <div className="travel-popup" style={style} ref={popupRef}>
+        <div className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: "#475569" }}>
+          How is {activeMember?.name || "you"} getting there?
+        </div>
+        <div className="flex flex-col gap-2">
+          {TRAVEL_MODES.map(mode => (
+            <button
+              key={mode.id}
+              className={"travel-btn" + (currentTravel === mode.id ? " selected" : "")}
+              onClick={() => onSelect(mode.id)}
+            >
+              <span className="travel-icon">{mode.icon}</span>
+              <span>{mode.label}</span>
+              {currentTravel === mode.id && <span style={{ marginLeft: "auto", color: "#1E3A8A" }}>✓</span>}
+            </button>
+          ))}
+        </div>
+        {currentTravel && (
+          <button
+            onClick={onRemove}
+            className="travel-btn mt-2"
+            style={{ borderColor: "#FECACA", background: "#FEF2F2", color: "#DC2626" }}
+          >
+            <span className="travel-icon">✕</span>
+            <span>Remove travel</span>
+          </button>
+        )}
+      </div>
+    </>
+  );
+}
+
 function App() {
   const [members, setMembers] = useState(DEFAULT_MEMBERS);
   const [addresses, setAddresses] = useState(DEFAULT_ADDRESSES);
   const [assignments, setAssignments] = useState({});
+  // travelModes: { "addr|dateKey|memberId": "car" | "plane" | "train" | "bus" }
+  const [travelModes, setTravelModes] = useState({});
   const [membersVersion, setMembersVersion] = useState(3);
   const [loaded, setLoaded] = useState(false);
   const [activeId, setActiveId] = useState(null);
@@ -112,6 +223,8 @@ function App() {
   const [newName, setNewName] = useState("");
   const [newInitial, setNewInitial] = useState("");
   const [newAddr, setNewAddr] = useState("");
+  // Travel picker state
+  const [travelPicker, setTravelPicker] = useState(null); // { addr, dateKey, anchor }
 
   const scrollRef = useRef(null);
   const saveTimer = useRef(null);
@@ -137,10 +250,12 @@ function App() {
         const m = Array.isArray(rec.members) && rec.members.length ? rec.members : DEFAULT_MEMBERS;
         const a = Array.isArray(rec.addresses) && rec.addresses.length ? sortAddresses(rec.addresses) : DEFAULT_ADDRESSES;
         const asg = rec.assignments && typeof rec.assignments === "object" ? rec.assignments : {};
+        const tm = rec.travelModes && typeof rec.travelModes === "object" ? rec.travelModes : {};
         const v = typeof rec.membersVersion === "number" ? rec.membersVersion : 3;
         setMembers(m);
         setAddresses(a);
         setAssignments(asg);
+        setTravelModes(tm);
         setMembersVersion(v);
         const lastId = localStorage.getItem("wya:activeId");
         if (lastId && m.some(x => x.id === lastId)) setActiveId(lastId);
@@ -158,7 +273,6 @@ function App() {
   useEffect(() => {
     if (!loaded) return;
     const id = setInterval(async () => {
-      // skip if we just wrote — give server a beat
       if (Date.now() - lastWrite.current < 2000) return;
       try {
         const r = await fetch(API_BASE + "/latest", { headers: { "X-Master-Key": MASTER_KEY }});
@@ -169,6 +283,7 @@ function App() {
         if (Array.isArray(rec.members)) setMembers(rec.members);
         if (Array.isArray(rec.addresses)) setAddresses(sortAddresses(rec.addresses));
         if (rec.assignments) setAssignments(rec.assignments);
+        if (rec.travelModes) setTravelModes(rec.travelModes);
         if (typeof rec.membersVersion === "number") setMembersVersion(rec.membersVersion);
         setStatus(s => s === "offline" ? "synced" : s);
       } catch (e) {
@@ -186,7 +301,7 @@ function App() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       try {
-        const body = { members, addresses: sortAddresses(addresses), assignments, membersVersion };
+        const body = { members, addresses: sortAddresses(addresses), assignments, travelModes, membersVersion };
         const r = await fetch(API_BASE, {
           method: "PUT",
           headers: { "Content-Type": "application/json", "X-Master-Key": MASTER_KEY },
@@ -200,7 +315,7 @@ function App() {
       }
     }, 500);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [members, addresses, assignments, membersVersion, loaded]);
+  }, [members, addresses, assignments, travelModes, membersVersion, loaded]);
 
   // Persist active member locally
   useEffect(() => {
@@ -233,16 +348,13 @@ function App() {
     const el = scrollRef.current;
     if (!el) return;
     const update = () => {
-      // Find leftmost visible day column
       const sl = el.scrollLeft;
-      const leftEdge = sl + 140; // past sticky col
-      // Each day col approx 56px
+      const leftEdge = sl + 140;
       const colW = 56;
       let idx = Math.max(0, Math.floor((leftEdge - 140) / colW));
       if (idx >= dayList.length) idx = dayList.length - 1;
       const d = dayList[idx];
       if (d) setVisibleMonth(MONTHS[d.getMonth()] + " " + d.getFullYear());
-      // Infinite scroll
       const remaining = el.scrollWidth - (el.scrollLeft + el.clientWidth);
       if (remaining < 400 && days < 365) {
         setDays(d => Math.min(365, d + 31));
@@ -253,34 +365,63 @@ function App() {
     return () => el.removeEventListener("scroll", update);
   }, [dayList, days]);
 
-  // Cell tap
-  const tapCell = useCallback((addr, dateKey) => {
+  // Cell tap — first tap adds/removes, long press or second tap opens travel picker
+  const tapCell = useCallback((addr, dateKey, e) => {
     if (!activeId) return;
+
+    const cellKey = addr + "|" + dateKey;
+    const cur = assignments[cellKey] || [];
+    const alreadyHere = cur.includes(activeId);
+
+    if (alreadyHere) {
+      // Already checked in — show travel picker
+      const rect = e.currentTarget.getBoundingClientRect();
+      setTravelPicker({ addr, dateKey, anchor: rect });
+      return;
+    }
+
+    // Not checked in — add them
     setAssignments(prev => {
       const key = addr + "|" + dateKey;
-      const cur = prev[key] || [];
+      const cur2 = prev[key] || [];
       const next = { ...prev };
-      if (cur.includes(activeId)) {
-        const filtered = cur.filter(x => x !== activeId);
-        if (filtered.length === 0) delete next[key];
-        else next[key] = filtered;
-      } else {
-        // remove activeId from any other cell with same dateKey
-        for (const k of Object.keys(next)) {
-          if (k === key) continue;
-          if (k.endsWith("|" + dateKey)) {
-            const arr = next[k];
-            if (arr.includes(activeId)) {
-              const f = arr.filter(x => x !== activeId);
-              if (f.length === 0) delete next[k]; else next[k] = f;
-            }
+      // Remove from other cells same date
+      for (const k of Object.keys(next)) {
+        if (k === key) continue;
+        if (k.endsWith("|" + dateKey)) {
+          const arr = next[k];
+          if (arr.includes(activeId)) {
+            const f = arr.filter(x => x !== activeId);
+            if (f.length === 0) delete next[k]; else next[k] = f;
           }
         }
-        next[key] = [...cur, activeId];
       }
+      next[key] = [...cur2, activeId];
       return next;
     });
-  }, [activeId]);
+  }, [activeId, assignments]);
+
+  // Handle travel mode selection
+  const handleTravelSelect = useCallback((modeId) => {
+    if (!travelPicker || !activeId) return;
+    const { addr, dateKey } = travelPicker;
+    const tmKey = addr + "|" + dateKey + "|" + activeId;
+    setTravelModes(prev => ({ ...prev, [tmKey]: modeId }));
+    setTravelPicker(null);
+  }, [travelPicker, activeId]);
+
+  // Remove travel mode
+  const handleTravelRemove = useCallback(() => {
+    if (!travelPicker || !activeId) return;
+    const { addr, dateKey } = travelPicker;
+    const tmKey = addr + "|" + dateKey + "|" + activeId;
+    setTravelModes(prev => {
+      const next = { ...prev };
+      delete next[tmKey];
+      return next;
+    });
+    setTravelPicker(null);
+  }, [travelPicker, activeId]);
 
   // Manage Family
   const addMember = () => {
@@ -312,6 +453,13 @@ function App() {
       }
       return next;
     });
+    setTravelModes(prev => {
+      const next = {};
+      for (const k of Object.keys(prev)) {
+        if (!k.endsWith("|" + id)) next[k] = prev[k];
+      }
+      return next;
+    });
     setMembersVersion(v => v + 1);
   };
 
@@ -335,7 +483,7 @@ function App() {
     return n;
   }, [assignments, todayKey]);
   const removeAddress = (addr) => {
-    if (lockedFor(addr) > 0) return; // hard guard
+    if (lockedFor(addr) > 0) return;
     setAddresses(addresses.filter(a => a !== addr));
   };
 
@@ -351,9 +499,24 @@ function App() {
   const stepBg = active ? active.bg : "#FFFFFF";
   const stepText = active ? active.text : "#0F172A";
 
+  // Travel picker current value
+  const travelPickerCurrentMode = travelPicker
+    ? travelModes[travelPicker.addr + "|" + travelPicker.dateKey + "|" + activeId] || null
+    : null;
+
   return (
     <div className="min-h-screen pb-24" style={{ background: "#EFF6FF" }}>
       <StatusPill status={status} />
+
+      {/* Travel picker popup */}
+      <TravelPicker
+        anchor={travelPicker?.anchor || null}
+        onSelect={handleTravelSelect}
+        onRemove={handleTravelRemove}
+        onClose={() => setTravelPicker(null)}
+        currentTravel={travelPickerCurrentMode}
+        activeMember={active}
+      />
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-6 sm:pt-8">
         <h1 className="font-display font-black tracking-tight" style={{ color: "#0F172A", fontSize: "clamp(3rem, 10vw, 5.5rem)", lineHeight: 1 }}>
@@ -397,6 +560,13 @@ function App() {
               );
             })}
           </div>
+
+          {/* Travel mode hint */}
+          {active && (
+            <div className="mt-4 text-xs font-medium opacity-60 flex items-center gap-1.5" style={{ color: stepText }}>
+              <span>✈️ Tap a cell you're already in to add travel mode</span>
+            </div>
+          )}
         </div>
 
         {/* Calendar */}
@@ -450,7 +620,8 @@ function App() {
                         const dow = d.getDay();
                         const weekend = dow === 0 || dow === 6;
                         const isToday = sameYMD(d, today);
-                        const key = addr + "|" + ymd(d);
+                        const dateKey = ymd(d);
+                        const key = addr + "|" + dateKey;
                         const ids = assignments[key] || [];
                         const occupants = ids.map(id => members.find(m => m.id === id)).filter(Boolean);
                         const n = occupants.length;
@@ -464,7 +635,7 @@ function App() {
                             borderLeft: "1px solid #F1F5F9",
                             padding: 0, minWidth: 56, width: 56, height: 52,
                           }}>
-                            <button onClick={() => tapCell(addr, ymd(d))}
+                            <button onClick={(e) => tapCell(addr, dateKey, e)}
                               className="w-full h-full flex items-center justify-center cell-btn no-tap-highlight"
                               style={{ background: "transparent" }}>
                               {n === 0 ? (
@@ -475,14 +646,37 @@ function App() {
                                 <div className="flex items-center justify-center flex-wrap gap-0.5" style={{ maxWidth: 52 }}>
                                   {occupants.map(o => {
                                     const ring = active && o.id === active.id;
+                                    const tmKey = addr + "|" + dateKey + "|" + o.id;
+                                    const travelMode = travelModes[tmKey];
+                                    const travelInfo = travelMode ? TRAVEL_MODES.find(m => m.id === travelMode) : null;
                                     return (
-                                      <span key={o.id} className="rounded-full flex items-center justify-center font-display font-bold"
+                                      <span key={o.id} className="relative rounded-full flex items-center justify-center font-display font-bold"
                                         style={{
                                           background: o.bg, color: o.text,
                                           width: chip, height: chip, fontSize: fs,
                                           boxShadow: ring ? "0 0 0 2px " + o.text : "0 1px 2px rgba(15,23,42,0.15)",
                                         }}>
                                         {o.initial}
+                                        {/* Travel mode badge */}
+                                        {travelInfo && (
+                                          <span style={{
+                                            position: "absolute",
+                                            bottom: -5,
+                                            right: -5,
+                                            fontSize: 9,
+                                            lineHeight: 1,
+                                            background: "white",
+                                            borderRadius: "50%",
+                                            width: 13,
+                                            height: 13,
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                                          }}>
+                                            {travelInfo.icon}
+                                          </span>
+                                        )}
                                       </span>
                                     );
                                   })}
